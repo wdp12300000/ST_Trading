@@ -1,11 +1,13 @@
 """
-EventStore 事件持久化层
+SQLiteEventStore 事件持久化层
 
 使用 SQLite3 实现事件的持久化存储，包括：
 - 数据库初始化和表结构创建
 - 事件插入
 - 历史事件查询
 - 自动清理机制（保留最近1000条记录）
+
+实现了 AbstractEventStore 接口，支持依赖注入。
 """
 
 import sqlite3
@@ -15,27 +17,33 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from src.core.event import Event
+from src.core.abstract_event_store import AbstractEventStore
 from src.utils.logger import get_logger
 
 logger = get_logger()
 
 
-class EventStore:
+class SQLiteEventStore(AbstractEventStore):
     """
-    事件持久化存储类
-    
-    使用 SQLite3 数据库存储事件，提供事件的插入、查询和自动清理功能
-    
+    SQLite 事件持久化存储类
+
+    实现 AbstractEventStore 接口，使用 SQLite3 数据库存储事件。
+    提供事件的插入、查询和自动清理功能。
+
     Attributes:
         db_path: 数据库文件路径
         conn: 数据库连接对象
         max_events: 最大保留事件数量，默认1000条
-    
+
     使用方式：
-        store = EventStore(db_path="data/events.db")
+        store = SQLiteEventStore(db_path="data/events.db")
         store.insert_event(event)
         events = store.query_recent_events(limit=10)
         store.close()
+
+    设计原则：
+        - 实现 AbstractEventStore 接口，支持依赖注入
+        - 可以被其他存储实现替换（如 RedisEventStore）
     """
     
     def __init__(self, db_path: str = "data/events.db", max_events: int = 1000):
@@ -253,7 +261,7 @@ class EventStore:
     def close(self):
         """
         关闭数据库连接
-        
+
         实现细节：
             - 提交未完成的事务
             - 关闭数据库连接
@@ -262,4 +270,8 @@ class EventStore:
             self.conn.commit()
             self.conn.close()
             logger.info("事件存储连接已关闭")
+
+
+# 向后兼容：保留 EventStore 作为 SQLiteEventStore 的别名
+EventStore = SQLiteEventStore
 
