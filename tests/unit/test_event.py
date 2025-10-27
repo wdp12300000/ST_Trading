@@ -116,9 +116,172 @@ class TestEvent:
     def test_event_representation(self):
         """测试事件的字符串表示"""
         event = Event(subject="test.event", data={"key": "value"})
-        
+
         # dataclass 应该自动提供 __repr__
         repr_str = repr(event)
         assert "Event" in repr_str, "repr应该包含类名"
         assert "test.event" in repr_str, "repr应该包含subject"
+
+
+class TestEventEnhancedMethods:
+    """Event 类增强方法测试"""
+
+    def test_to_dict_basic(self):
+        """测试 to_dict 方法基本功能"""
+        event = Event(
+            subject="order.created",
+            data={"order_id": "12345", "symbol": "BTC/USDT"},
+            source="order_manager"
+        )
+
+        result = event.to_dict()
+
+        assert isinstance(result, dict), "to_dict 应该返回字典"
+        assert result["subject"] == "order.created", "应该包含 subject"
+        assert result["data"] == {"order_id": "12345", "symbol": "BTC/USDT"}, "应该包含 data"
+        assert result["event_id"] == event.event_id, "应该包含 event_id"
+        assert result["source"] == "order_manager", "应该包含 source"
+        assert "timestamp" in result, "应该包含 timestamp"
+
+    def test_to_dict_timestamp_format(self):
+        """测试 to_dict 中时间戳的格式"""
+        event = Event(subject="test", data={})
+        result = event.to_dict()
+
+        # 时间戳应该是 ISO 格式字符串
+        assert isinstance(result["timestamp"], str), "timestamp 应该是字符串"
+        assert "T" in result["timestamp"], "timestamp 应该是 ISO 格式"
+
+        # 应该能够反序列化
+        from datetime import datetime
+        parsed_time = datetime.fromisoformat(result["timestamp"])
+        assert isinstance(parsed_time, datetime), "timestamp 应该能够解析为 datetime"
+
+    def test_to_dict_with_none_source(self):
+        """测试 to_dict 处理 None 的 source"""
+        event = Event(subject="test", data={})
+        result = event.to_dict()
+
+        assert result["source"] is None, "source 为 None 时应该保持 None"
+
+    def test_from_dict_basic(self):
+        """测试 from_dict 方法基本功能"""
+        data_dict = {
+            "event_id": "test-uuid-123",
+            "subject": "order.created",
+            "data": {"order_id": "12345"},
+            "timestamp": "2025-10-27T10:30:00",
+            "source": "order_manager"
+        }
+
+        event = Event.from_dict(data_dict)
+
+        assert isinstance(event, Event), "from_dict 应该返回 Event 实例"
+        assert event.event_id == "test-uuid-123", "应该正确设置 event_id"
+        assert event.subject == "order.created", "应该正确设置 subject"
+        assert event.data == {"order_id": "12345"}, "应该正确设置 data"
+        assert event.source == "order_manager", "应该正确设置 source"
+
+    def test_from_dict_timestamp_parsing(self):
+        """测试 from_dict 正确解析时间戳"""
+        from datetime import datetime
+
+        data_dict = {
+            "event_id": "test-uuid",
+            "subject": "test",
+            "data": {},
+            "timestamp": "2025-10-27T10:30:00.123456",
+            "source": None
+        }
+
+        event = Event.from_dict(data_dict)
+
+        assert isinstance(event.timestamp, datetime), "timestamp 应该是 datetime 对象"
+        assert event.timestamp.year == 2025, "应该正确解析年份"
+        assert event.timestamp.month == 10, "应该正确解析月份"
+        assert event.timestamp.day == 27, "应该正确解析日期"
+
+    def test_from_dict_with_none_source(self):
+        """测试 from_dict 处理 None 的 source"""
+        data_dict = {
+            "event_id": "test-uuid",
+            "subject": "test",
+            "data": {},
+            "timestamp": "2025-10-27T10:30:00",
+            "source": None
+        }
+
+        event = Event.from_dict(data_dict)
+        assert event.source is None, "应该正确处理 None 的 source"
+
+    def test_to_dict_from_dict_roundtrip(self):
+        """测试 to_dict 和 from_dict 的往返转换"""
+        original = Event(
+            subject="order.created",
+            data={"order_id": "12345", "price": 50000.0},
+            source="order_manager"
+        )
+
+        # 转换为字典
+        dict_data = original.to_dict()
+
+        # 从字典恢复
+        restored = Event.from_dict(dict_data)
+
+        # 验证所有字段都正确恢复
+        assert restored.event_id == original.event_id, "event_id 应该一致"
+        assert restored.subject == original.subject, "subject 应该一致"
+        assert restored.data == original.data, "data 应该一致"
+        assert restored.source == original.source, "source 应该一致"
+        # 时间戳可能有微小差异，只比较到秒
+        assert restored.timestamp.replace(microsecond=0) == original.timestamp.replace(microsecond=0), "timestamp 应该基本一致"
+
+    def test_validate_valid_event(self):
+        """测试 validate 方法对有效事件返回 True"""
+        event = Event(
+            subject="order.created",
+            data={"order_id": "12345"},
+            source="order_manager"
+        )
+
+        assert event.validate() is True, "有效事件应该通过验证"
+
+    def test_validate_checks_subject_not_empty(self):
+        """测试 validate 检查 subject 不为空"""
+        event = Event(subject="", data={})
+
+        assert event.validate() is False, "空 subject 应该验证失败"
+
+    def test_validate_checks_subject_type(self):
+        """测试 validate 检查 subject 类型"""
+        # 这个测试会在 __post_init__ 阶段就失败
+        with pytest.raises(TypeError):
+            Event(subject=123, data={})
+
+    def test_validate_checks_data_type(self):
+        """测试 validate 检查 data 类型"""
+        # 这个测试会在 __post_init__ 阶段就失败
+        with pytest.raises(TypeError):
+            Event(subject="test", data="not a dict")
+
+    def test_validate_allows_empty_data(self):
+        """测试 validate 允许空的 data 字典"""
+        event = Event(subject="test", data={})
+
+        assert event.validate() is True, "空 data 字典应该是有效的"
+
+    def test_validate_with_complex_data(self):
+        """测试 validate 处理复杂的 data 结构"""
+        event = Event(
+            subject="order.created",
+            data={
+                "order_id": "12345",
+                "items": [1, 2, 3],
+                "metadata": {
+                    "nested": "value"
+                }
+            }
+        )
+
+        assert event.validate() is True, "复杂 data 结构应该是有效的"
 
