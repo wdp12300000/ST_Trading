@@ -266,3 +266,247 @@ PM（Portfolio Manager）模块是量化交易系统的账户管理层，负责�
 5. THE PM 管理器 SHALL 在完成所有账户加载后记录汇总信息（成功数量、失败数量）
 6. THE PM 实例 SHALL 在初始化时记录信息级别日志
 7. THE PM 实例 SHALL 在状态变更时记录信息级别日志
+
+## DE 数据引擎模块需求文档
+
+### 简介
+
+DE（Data Engine）数据引擎是量化交易系统的核心数据层，负责管理币安永续合约的所有数据交互，包括 REST API 客户端管理、WebSocket 实时数据订阅、历史数据获取、订单执行和用户数据流管理。该模块采用事件驱动架构（EDA），通过发布/订阅模式与其他模块（PM、TA）进行通信。
+
+### 术语表
+
+- **DE_Module**：数据引擎模块，本需求文档描述的系统
+- **DEManager**：DE模块管理器，单例模式，管理所有账户的客户端和连接
+- **Binance_API**：币安永续合约官方 REST API
+- **BinanceClient**：币安REST API客户端类，每个账户一个实例
+- **WebSocket_Connection**：币安 WebSocket 实时数据连接
+- **MarketWebSocket**：市场数据WebSocket连接，每个账户独立
+- **UserDataWebSocket**：用户数据流WebSocket连接，每个账户独立
+- **Event_Bus**：系统事件总线，用于模块间异步通信
+- **PM_Module**：投资组合管理模块
+- **TA_Module**：技术分析模块
+- **Trading_Module**：交易执行模块
+- **User_Data_Stream**：币安用户数据流，用于接收账户和订单更新
+- **ListenKey**：币安用户数据流的认证密钥
+- **Kline**：K线数据（蜡烛图数据）
+
+- **Order_Type**：订单类型（市价单、限价单、止损单、止盈单等）
+- **API_Key**：币安 API 访问密钥
+- **API_Secret**：币安 API 访问密钥对应的密钥
+
+### DE模块事件定义
+
+DE模块通过事件总线与其他模块通信，以下是所有相关事件的定义：
+
+#### 订阅的事件（输入）
+
+| 事件主题 | 发布者 | 数据格式 | 说明 |
+|---------|--------|---------|------|
+| `pm.account.loaded` | PM模块 | `{user_id, name, api_key, api_secret, strategy, testnet}` | 账户加载完成，触发客户端创建 |
+| `de.subscribe.kline` | 策略模块 | `{user_id, symbol, interval}` | 订阅K线数据流 |
+| `de.get_historical_klines` | 策略模块/TA模块 | `{user_id, symbol, interval, limit}` | 获取历史K线数据 |
+| `trading.order.create` | Trading模块 | `{user_id, symbol, side, order_type, quantity, price?, stopPrice?}` | 创建订单 |
+| `trading.order.cancel` | Trading模块 | `{user_id, symbol, order_id}` | 取消订单 |
+| `trading.get_account_balance` | Trading模块 | `{user_id, asset}` | 查询账户余额 |
+
+#### 发布的事件（输出）
+
+| 事件主题 | 触发时机 | 数据格式 | 说明 |
+|---------|---------|---------|------|
+| `de.client.connected` | 客户端创建成功 | `{user_id, testnet, timestamp}` | 客户端连接成功 |
+| `de.client.connection_failed` | 客户端创建失败 | `{user_id, error_type, error_message}` | 客户端连接失败 |
+| `de.websocket.connected` | WebSocket连接成功 | `{user_id, connection_type, timestamp}` | WebSocket连接成功 |
+| `de.websocket.disconnected` | WebSocket断开 | `{user_id, connection_type, reason}` | WebSocket连接断开 |
+| `de.kline.update` | 收到K线数据 | `{user_id, symbol, interval, kline: {open, high, low, close, volume, timestamp, is_closed}}` | K线数据更新 |
+| `de.historical_klines.success` | 历史数据获取成功 | `{user_id, symbol, interval, klines: [...]}` | 历史K线获取成功 |
+| `de.historical_klines.failed` | 历史数据获取失败 | `{user_id, symbol, interval, error}` | 历史K线获取失败 |
+| `de.order.submitted` | 订单提交成功 | `{user_id, order_id, symbol, side, type, quantity, price}` | 订单提交成功 |
+| `de.order.failed` | 订单提交失败 | `{user_id, symbol, error, retry_count}` | 订单提交失败 |
+| `de.order.cancelled` | 订单取消成功 | `{user_id, order_id, symbol}` | 订单已取消 |
+| `de.order.filled` | 订单成交 | `{user_id, order_id, symbol, price, quantity, timestamp}` | 订单已成交 |
+| `de.order.update` | 订单状态变化 | `{user_id, order_id, status, filled_quantity, remaining_quantity}` | 订单状态更新 |
+| `de.account.balance` | 账户余额查询成功 | `{user_id, asset, available_balance}` | 账户余额信息 |
+| `de.position.update` | 持仓更新 | `{user_id, symbol, side, quantity, unrealized_pnl, entry_price}` | 持仓更新 |
+| `de.account.update` | 账户更新 | `{user_id, total_equity, available_balance, margin_used}` | 账户更新 |
+| `de.user_stream.started` | 用户数据流启动 | `{user_id, listen_key}` | 用户数据流启动成功 |
+
+### 需求
+
+#### 需求 1：币安客户端管理
+
+**用户故事：** 作为系统管理员，我希望 DE 模块能够管理币安 API 客户端的生命周期，以便系统能够与币安交易所进行真实场景的实盘测试。
+
+##### 验收标准
+
+1. WHEN DE_Module 接收到 `pm.account.loaded` 事件，THE DE_Module SHALL 从事件数据中提取 user_id、api_key 和 api_secret
+2. WHEN 提取参数成功，THE DE_Module SHALL 为该账户创建 BinanceClient 实例
+3. THE BinanceClient SHALL 使用币安正式网API端点（https://fapi.binance.com），不使用测试网
+4. WHEN BinanceClient 创建成功，THE DE_Module SHALL 发布 `de.client.connected` 事件，事件数据包含 user_id 和时间戳
+5. WHEN BinanceClient 创建失败，THE DE_Module SHALL 发布 `de.client.connection_failed` 事件，事件数据包含 user_id、错误类型和错误消息
+6. THE DE_Module SHALL 直接调用币安官方 REST API，不依赖币安官方以外的第三方封装库（如python-binance），但可以使用标准HTTP客户端库（如aiohttp、httpx）
+7. THE DE_Module SHALL 维护 user_id 到 BinanceClient 实例的映射关系
+8. THE DE_Module SHALL 支持同时管理多个账户的 BinanceClient 实例
+9. WHEN DE_Module 需要断开 BinanceClient，THE DE_Module SHALL 关闭所有活跃的连接并释放相关资源
+
+#### 需求 2：WebSocket K线数据订阅
+
+**用户故事：** 作为交易策略开发者，我希望实时接收 K线数据更新，以便策略能够基于最新市场数据做出决策。
+
+##### 验收标准
+
+1. WHEN DE_Module 成功创建 BinanceClient 后，THE DE_Module SHALL 为该账户建立独立的 MarketWebSocket 连接到币安市场数据流
+2. WHEN MarketWebSocket 连接成功，THE DE_Module SHALL 发布 `de.websocket.connected` 事件，事件数据包含 user_id、connection_type（market）和时间戳
+3. WHEN DE_Module 接收到 `de.subscribe.kline` 事件，THE DE_Module SHALL 从事件数据中提取 user_id、symbol（交易对）和 interval（时间周期）参数
+4. WHEN 提取参数成功，THE DE_Module SHALL 通过该账户的 MarketWebSocket 订阅指定交易对和时间周期的 K线数据流
+5. WHEN MarketWebSocket 接收到新的 Kline 数据，THE DE_Module SHALL 直接发布 `de.kline.update` 事件，事件数据包含 user_id、symbol、interval 和完整的 K线信息（open、high、low、close、volume、timestamp、is_closed）
+6. THE DE_Module SHALL NOT 在内存中缓存 K线数据，以避免断线数据不齐等复杂问题
+7. WHEN MarketWebSocket 断开，THE DE_Module SHALL 发布 `de.websocket.disconnected` 事件并立即尝试重新建立连接
+8. WHEN MarketWebSocket 重连成功，THE DE_Module SHALL 恢复之前的所有订阅配置
+9. THE DE_Module SHALL 支持每个账户同时订阅多个交易对和时间周期的 K线数据流
+10. THE DE_Module SHALL 确保不同账户的 MarketWebSocket 连接相互独立
+
+#### 需求 3：历史K线数据获取
+
+**用户故事：** 作为技术分析模块，我需要获取历史 K线数据，以便计算技术指标和回测策略。
+
+##### 验收标准
+
+1. WHEN DE_Module 接收到 `de.get_historical_klines` 事件，THE DE_Module SHALL 从事件数据中提取 user_id、symbol（交易对）、interval（时间周期）和 limit（K线数量）参数
+2. WHEN DE_Module 提取参数成功，THE DE_Module SHALL 使用对应账户的 BinanceClient 通过 REST API 请求指定数量的最新历史 Kline 数据
+3. WHEN 历史 Kline 数据获取成功，THE DE_Module SHALL 发布 `de.historical_klines.success` 事件，事件数据包含 user_id、symbol、interval 和所有 K线记录
+4. WHEN 历史 Kline 数据获取失败，THE DE_Module SHALL 发布 `de.historical_klines.failed` 事件，事件数据包含 user_id、symbol、interval 和错误信息
+5. THE DE_Module SHALL 每次请求时从币安服务器重新获取历史数据，不使用本地缓存
+
+#### 需求 4：订单执行管理
+
+**用户故事：** 作为交易执行模块，我需要提交和管理订单，以便执行交易策略的买卖决策。
+
+##### 验收标准
+
+1. THE DE_Module SHALL 订阅 `trading.order.create` 事件以接收来自 Trading 模块的下单请求
+2. WHEN DE_Module 接收到 `trading.order.create` 事件，THE DE_Module SHALL 从事件数据中提取 user_id、symbol、side（BUY/SELL）、order_type、quantity 和可选的 price、stopPrice 参数
+3. THE DE_Module SHALL 支持所有币安永续合约 Order_Type（MARKET、LIMIT、STOP、TAKE_PROFIT、STOP_MARKET、TAKE_PROFIT_MARKET）
+4. WHEN 提取参数成功，THE DE_Module SHALL 使用对应账户的 BinanceClient 通过 REST API 提交订单到币安交易所
+5. WHEN 订单提交成功，THE DE_Module SHALL 发布 `de.order.submitted` 事件，事件数据包含 user_id、order_id、symbol、side、type、quantity 和 price
+6. WHEN 订单提交失败，THE DE_Module SHALL 自动重试提交订单最多 3 次
+7. WHEN 订单重试 3 次后仍然失败，THE DE_Module SHALL 发布 `de.order.failed` 事件，事件数据包含 user_id、symbol、error 和 retry_count
+8. THE DE_Module SHALL 订阅 `trading.order.cancel` 事件以接收撤单请求
+9. WHEN DE_Module 接收到 `trading.order.cancel` 事件，THE DE_Module SHALL 从事件数据中提取 user_id、symbol 和 order_id 参数
+10. WHEN 订单撤销成功，THE DE_Module SHALL 发布 `de.order.cancelled` 事件，事件数据包含 user_id、order_id 和 symbol
+
+#### 需求 5：订单状态更新
+
+**用户故事：** 作为风险管理模块，我需要实时了解订单状态变化，以便监控交易执行情况和管理风险敞口。
+
+##### 验收标准
+
+1. WHEN UserDataWebSocket 接收到订单成交通知，THE DE_Module SHALL 发布 `de.order.filled` 事件，事件数据包含 user_id、order_id、symbol、price、quantity 和 timestamp
+2. WHEN UserDataWebSocket 接收到订单状态变化通知，THE DE_Module SHALL 发布 `de.order.update` 事件，事件数据包含 user_id、order_id、status、filled_quantity 和 remaining_quantity
+3. THE DE_Module SHALL 通过 UserDataWebSocket 实时接收所有订单状态更新，无人为延迟
+4. THE DE_Module SHALL 确保订单更新事件包含足够的信息供其他模块使用，无需额外查询
+
+#### 需求 6：账户信息管理
+
+**用户故事：** 作为投资组合管理模块，我需要查询账户余额和持仓信息，以便进行资金管理和仓位控制。
+
+##### 验收标准
+
+1. THE DE_Module SHALL 订阅 `trading.get_account_balance` 事件以接收来自 Trading 模块的账户余额查询请求
+2. WHEN DE_Module 接收到 `trading.get_account_balance` 事件，THE DE_Module SHALL 从事件数据中提取 user_id 和 asset（保证金资产类型，如 USDT 或 USDC）
+3. WHEN 提取参数成功，THE DE_Module SHALL 使用对应账户的 BinanceClient 通过 REST API 查询指定资产的可用保证金余额
+4. WHEN 账户余额查询成功，THE DE_Module SHALL 发布 `de.account.balance` 事件，事件数据包含 user_id、asset 和 available_balance
+5. WHEN UserDataWebSocket 接收到持仓更新通知，THE DE_Module SHALL 发布 `de.position.update` 事件，事件数据包含 user_id、symbol、side、quantity、unrealized_pnl 和 entry_price
+6. WHEN UserDataWebSocket 接收到账户更新通知，THE DE_Module SHALL 发布 `de.account.update` 事件，事件数据包含 user_id、total_equity、available_balance 和 margin_used
+
+#### 需求 7：用户数据流管理
+
+**用户故事：** 作为系统运维人员，我需要确保用户数据流持续有效，以便系统能够实时接收账户和订单更新。
+
+##### 验收标准
+
+1. WHEN DE_Module 成功创建 BinanceClient 后，THE DE_Module SHALL 自动启动该账户的用户数据流
+2. WHEN 启动用户数据流时，THE DE_Module SHALL 使用 BinanceClient 通过 REST API 创建 ListenKey
+3. WHEN ListenKey 创建成功，THE DE_Module SHALL 建立 UserDataWebSocket 连接到用户数据流端点
+4. WHEN UserDataWebSocket 连接成功，THE DE_Module SHALL 发布 `de.user_stream.started` 事件，事件数据包含 user_id 和 listen_key
+5. THE DE_Module SHALL 每 30 分钟通过 BinanceClient 发送 keepalive 请求以延长 ListenKey 有效期
+6. WHEN UserDataWebSocket 断开，THE DE_Module SHALL 发布 `de.websocket.disconnected` 事件并立即重新建立连接
+7. WHEN UserDataWebSocket 重连时，THE DE_Module SHALL 重新创建 ListenKey 并建立新的连接
+8. THE DE_Module SHALL 确保 UserDataWebSocket 实时推送币安的账户和订单更新，无人为延迟
+
+#### 需求 8：错误处理和恢复
+
+**用户故事：** 作为系统可靠性工程师，我需要系统能够处理各种异常情况并自动恢复，以确保交易系统的稳定运行。
+
+##### 验收标准
+
+1. WHEN BinanceClient 的 REST API 请求返回网络错误，THE DE_Module SHALL 记录 ERROR 级别日志并发布相应的失败事件
+2. WHEN WebSocket 接收到无效数据格式，THE DE_Module SHALL 记录 WARNING 级别日志并继续处理后续数据
+3. WHEN DE_Module 检测到 API_Key 或 API_Secret 无效，THE DE_Module SHALL 发布 `de.client.connection_failed` 事件，事件数据包含 user_id 和认证失败信息
+4. WHEN 订单执行遇到余额不足错误，THE DE_Module SHALL 发布 `de.order.failed` 事件，事件数据明确标识余额不足原因
+5. WHEN WebSocket 连接失败超过 5 次，THE DE_Module SHALL 记录 CRITICAL 级别日志并发布告警事件
+6. THE DE_Module SHALL 为所有异常情况提供清晰的错误消息，包含 user_id、错误类型、错误代码和可读的中文错误描述
+7. THE DE_Module SHALL 确保单个账户的错误不影响其他账户的正常运行
+
+#### 需求 9：事件驱动集成
+
+**用户故事：** 作为系统架构师，我需要 DE 模块通过事件总线与其他模块解耦通信，以便系统具有良好的可扩展性和可维护性。
+
+##### 验收标准
+
+1. THE DE_Module SHALL 通过 Event_Bus 订阅 `pm.account.loaded` 事件以接收来自 PM_Module 的账户加载通知
+2. THE DE_Module SHALL 通过 Event_Bus 订阅 `de.subscribe.kline` 事件以接收 K线订阅请求
+3. THE DE_Module SHALL 通过 Event_Bus 订阅 `de.get_historical_klines` 事件以接收历史数据请求
+4. THE DE_Module SHALL 通过 Event_Bus 订阅 `trading.order.create` 事件以接收来自 Trading_Module 的下单请求
+5. THE DE_Module SHALL 通过 Event_Bus 订阅 `trading.order.cancel` 事件以接收撤单请求
+6. THE DE_Module SHALL 通过 Event_Bus 订阅 `trading.get_account_balance` 事件以接收账户余额查询请求
+7. THE DE_Module SHALL 通过 Event_Bus 发布所有输出事件（连接状态、数据更新、订单状态、账户更新）
+8. THE DE_Module SHALL 使用面向对象设计，将所有功能封装在类方法中
+9. THE DE_Module SHALL 使用单例模式实现 DEManager 类，确保全局唯一实例
+10. THE DE_Module SHALL 遵循 YAGNI 原则，仅实现当前需要的功能，不进行过早优化
+
+#### 需求 10：API密钥管理
+
+**用户故事：** 作为系统架构师，我需要确保 API 密钥的安全管理和正确使用，以便在真实市场环境中进行实盘测试（通过控制交易数额降低风险）。
+
+##### 验收标准
+
+1. THE DE_Module SHALL NOT 维护独立的配置文件存储 API 密钥
+2. THE DE_Module SHALL 从 PM_Module 发布的 `pm.account.loaded` 事件中获取 api_key 和 api_secret
+3. THE DE_Module SHALL 将接收到的 api_key 和 api_secret 传递给 BinanceClient，连接到币安正式网进行真实场景测试
+4. THE DE_Module SHALL 确保 API 密钥仅在内存中存储，不写入日志或持久化存储
+5. THE DE_Module SHALL 在日志中记录 API 操作时，仅记录 user_id，不记录 api_key 或 api_secret
+6. THE DE_Module SHALL 支持同时管理多个账户的不同 API 密钥，确保密钥不会混淆
+7. THE DE_Module SHALL 通过 PM_Module 配置的交易数额限制来控制风险，而不是使用测试网
+
+#### 需求 11：日志记录
+
+**用户故事：** 作为系统管理员，我希望 DE 模块能够记录详细的操作日志，以便排查问题和监控系统状态。
+
+##### 验收标准
+
+1. THE DE_Module SHALL 在创建 BinanceClient 时记录 INFO 级别日志，包含 user_id 和 testnet 标志
+2. THE DE_Module SHALL 在 WebSocket 连接建立时记录 INFO 级别日志，包含 user_id 和连接类型（market/user_data）
+3. THE DE_Module SHALL 在 WebSocket 断开时记录 WARNING 级别日志，包含 user_id、连接类型和断开原因
+4. THE DE_Module SHALL 在订单提交时记录 INFO 级别日志，包含 user_id、symbol、side 和 order_type
+5. THE DE_Module SHALL 在订单成交时记录 INFO 级别日志，包含 user_id、order_id 和成交价格
+6. THE DE_Module SHALL 在 API 请求失败时记录 ERROR 级别日志，包含 user_id、请求类型和错误详情
+7. THE DE_Module SHALL 在 WebSocket 重连时记录 INFO 级别日志，包含 user_id、连接类型和重连次数
+8. THE DE_Module SHALL 在所有日志中包含文件名和行号，遵循项目日志规范
+9. THE DE_Module SHALL 使用 Loguru 记录所有日志，日志语言为中文
+
+#### 需求 12：多账户管理
+
+**用户故事：** 作为系统架构师，我需要 DE 模块能够同时管理多个交易账户，以便支持多账户交易策略。
+
+##### 验收标准
+
+1. THE DE_Module SHALL 使用单例模式实现 DEManager 类，作为全局唯一的 DE 模块管理器
+2. THE DE_Module SHALL 为每个账户创建独立的 BinanceClient 实例
+3. THE DE_Module SHALL 维护 user_id 到 BinanceClient 实例的映射关系
+4. THE DE_Module SHALL 为每个账户建立独立的 MarketWebSocket 连接
+5. THE DE_Module SHALL 为每个账户建立独立的 UserDataWebSocket 连接
+6. THE DE_Module SHALL 确保不同账户的操作相互隔离，一个账户的错误不影响其他账户
+7. THE DE_Module SHALL 提供方法查询所有已创建客户端的 user_id 列表
+8. THE DE_Module SHALL 提供方法根据 user_id 获取对应的 BinanceClient 实例
+9. WHEN 系统关闭时，THE DE_Module SHALL 优雅关闭所有账户的 WebSocket 连接和 BinanceClient
+
