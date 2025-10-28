@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from src.core.event import Event
-from src.core.abstract_event_store import AbstractEventStore
+from src.core.event.event import Event
+from src.core.event.abstract_event_store import AbstractEventStore
 from src.utils.logger import get_logger
 
 logger = get_logger()

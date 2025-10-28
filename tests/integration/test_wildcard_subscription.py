@@ -14,8 +14,8 @@
 import pytest
 import asyncio
 from src.core.event import Event
-from src.core.event_bus import EventBus
-from src.core.event_store import SQLiteEventStore
+from src.core.event import EventBus
+from src.core.event import SQLiteEventStore
 
 
 class TestWildcardSubscription:

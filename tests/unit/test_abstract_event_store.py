@@ -6,7 +6,7 @@ AbstractEventStore 抽象接口测试
 
 import pytest
 from abc import ABC
-from src.core.abstract_event_store import AbstractEventStore
+from src.core.event import AbstractEventStore
 from src.core.event import Event
 
 
@@ -78,14 +78,14 @@ class TestSQLiteEventStoreInterface:
     
     def test_sqlite_event_store_implements_interface(self):
         """测试 SQLiteEventStore 实现了 AbstractEventStore 接口"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
         
         assert issubclass(SQLiteEventStore, AbstractEventStore), \
             "SQLiteEventStore 应该继承自 AbstractEventStore"
     
     def test_sqlite_event_store_can_be_instantiated(self, tmp_path):
         """测试 SQLiteEventStore 可以被实例化"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
         
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -97,7 +97,7 @@ class TestSQLiteEventStoreInterface:
     
     def test_sqlite_event_store_has_all_methods(self, tmp_path):
         """测试 SQLiteEventStore 实现了所有必需的方法"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
         
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -117,7 +117,7 @@ class TestDependencyInjection:
     
     def test_can_use_different_implementations(self, tmp_path):
         """测试可以使用不同的存储实现"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
         
         # 创建两个不同的实现
         db_path1 = tmp_path / "db1.db"
@@ -173,7 +173,7 @@ class TestDependencyInjection:
     
     def test_function_accepts_abstract_type(self, tmp_path):
         """测试函数可以接受抽象类型参数"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
         
         def process_events(store: AbstractEventStore):
             """接受抽象类型的函数"""

@@ -14,7 +14,7 @@ AbstractEventStore 抽象接口
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 
-from src.core.event import Event
+from src.core.event.event import Event
 
 
 class AbstractEventStore(ABC):

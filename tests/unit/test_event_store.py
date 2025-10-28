@@ -12,8 +12,7 @@ import pytest
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
-from src.core.event import Event
-from src.core.event_store import EventStore
+from src.core.event import Event, SQLiteEventStore as EventStore
 
 
 class TestEventStore:

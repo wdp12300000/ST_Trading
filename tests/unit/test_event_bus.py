@@ -14,8 +14,8 @@ EventBus 事件总线单元测试
 import pytest
 import asyncio
 from src.core.event import Event
-from src.core.event_bus import EventBus
-from src.core.abstract_event_store import AbstractEventStore
+from src.core.event import EventBus
+from src.core.event import AbstractEventStore
 
 
 class TestEventBusSingleton:
@@ -34,7 +34,7 @@ class TestEventBusSingleton:
 
     def test_singleton_with_event_store(self, tmp_path):
         """测试带 event_store 参数的单例"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
 
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -401,7 +401,7 @@ class TestEventBusDependencyInjection:
 
     def test_can_inject_event_store(self, tmp_path):
         """测试可以注入 EventStore"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
 
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -421,7 +421,7 @@ class TestEventBusDependencyInjection:
     @pytest.mark.asyncio
     async def test_events_persisted_when_store_provided(self, tmp_path):
         """测试提供 EventStore 时事件被持久化"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
 
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -453,7 +453,7 @@ class TestEventBusDependencyInjection:
     @pytest.mark.asyncio
     async def test_optional_persistence_parameter(self, tmp_path):
         """测试可选的 persist 参数"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
 
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))
@@ -486,7 +486,7 @@ class TestEventBusIntegration:
     @pytest.mark.asyncio
     async def test_complete_workflow(self, tmp_path):
         """测试完整的工作流程"""
-        from src.core.event_store import SQLiteEventStore
+        from src.core.event import SQLiteEventStore
 
         db_path = tmp_path / "test.db"
         store = SQLiteEventStore(db_path=str(db_path))

@@ -92,10 +92,10 @@ class TestLogger:
         assert "|" in log_content, "日志格式应包含分隔符 |"
         assert "INFO" in log_content, "日志应包含级别信息"
         assert test_message in log_content, "日志应包含消息内容"
-        assert "test_log_format" in log_content, "日志应包含函数名"
         assert ":" in log_content, "日志应包含行号分隔符"
 
-        # 验证日志格式符合：时间 | 等级 | 模块:函数:行号 | 信息
+        # 验证日志格式符合：时间 | 等级 | 模块名:行号 | 信息
+        # 新格式简化了位置信息，只包含模块名和行号
         lines = log_content.strip().split("\n")
         for line in lines:
             if test_message in line:

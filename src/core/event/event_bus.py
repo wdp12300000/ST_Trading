@@ -32,8 +32,8 @@ import fnmatch
 from typing import Callable, Optional, List, Dict
 from collections import defaultdict
 
-from src.core.event import Event
-from src.core.abstract_event_store import AbstractEventStore
+from src.core.event.event import Event
+from src.core.event.abstract_event_store import AbstractEventStore
 from src.utils.logger import get_logger
 
 logger = get_logger()
