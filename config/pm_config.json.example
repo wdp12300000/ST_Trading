@@ -1,0 +1,19 @@
+{
+  "users": {
+    "user_001": {
+      "name": "账户1",
+      "api_key": "your_binance_api_key_here",
+      "api_secret": "your_binance_api_secret_here",
+      "strategy": "ma_stop_st",
+      "testnet": false
+    },
+    "user_002": {
+      "name": "测试账户",
+      "api_key": "your_binance_testnet_api_key_here",
+      "api_secret": "your_binance_testnet_api_secret_here",
+      "strategy": "ma_stop_st",
+      "testnet": true
+    }
+  }
+}
+

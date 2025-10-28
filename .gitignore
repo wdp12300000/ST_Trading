@@ -56,6 +56,7 @@ data/*.sqlite3
 # 配置文件（可能包含敏感信息）
 config/*.env
 config/local_*.py
+config/pm_config.json
 .env
 
 # Jupyter Notebook
