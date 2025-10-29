@@ -1,0 +1,23 @@
+{
+  "timeframe": "15m",
+  "leverage": 4,
+  "position_side": "BOTH",
+  "margin_mode": "CROSS",
+  "margin_type": "USDC",
+  "reverse": false,
+  "grid_trading": {
+    "enabled": false
+  },
+  "trading_pairs": [
+    {
+      "symbol": "XRPUSDC",
+      "indicator_params": {
+        "ma_stop_ta": {
+          "period": 3,
+          "percent": 2
+        }
+      }
+    }
+  ]
+}
+

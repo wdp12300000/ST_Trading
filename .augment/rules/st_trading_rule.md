@@ -510,3 +510,190 @@ DE模块通过事件总线与其他模块通信，以下是所有相关事件的
 8. THE DE_Module SHALL 提供方法根据 user_id 获取对应的 BinanceClient 实例
 9. WHEN 系统关闭时，THE DE_Module SHALL 优雅关闭所有账户的 WebSocket 连接和 BinanceClient
 
+
+## ST 策略执行模块需求文档
+
+### 简介
+
+ST（Strategy Execution）模块是量化交易系统的策略执行核心模块,负责加载策略配置、管理策略实例、处理指标信号、生成交易信号、获取持仓状态以及对入场及出场订单成交事件作出反应。该模块采用事件驱动架构(EDA),通过事件总线与其他模块(PM、TA、TR)进行解耦通信。
+
+### 术语表
+
+- **ST 模块**: Strategy Execution 模块,策略执行模块
+- **PM 模块**: Portfolio Management 模块,账户管理模块
+- **TA 模块**: Technical Analysis 模块,技术分析/指标模块
+- **TR 模块**: Trading 模块,交易执行模块
+- **事件总线**: 系统中用于发布/订阅事件的消息中间件
+- **策略实例**: 根据策略配置及具体策略文件创建的具体策略对象
+- **指标信号**: TA 模块计算并发布的技术指标数据和信号
+- **交易信号**: ST 模块根据策略逻辑生成的买入/卖出信号
+- **持仓状态**: 策略中每个交易对的当前持仓信息
+- **网格交易**: 在特定价格区间内设置多个买卖订单的交易策略
+- **入场订单**: 开仓订单,建立新的持仓
+- **出场订单**: 平仓订单,关闭现有持仓
+- **STManager**: ST模块管理器,单例模式,管理所有策略实例
+- **BaseStrategy**: 策略抽象基类,定义策略的通用接口
+- **PositionManager**: 持仓状态管理器,管理每个交易对的持仓状态
+
+### ST模块事件定义
+
+ST模块通过事件总线与其他模块通信,以下是所有相关事件的定义:
+
+#### 订阅的事件(输入)
+
+| 事件主题 | 发布者 | 数据格式 | 说明 |
+|---------|--------|---------|------|
+| `pm.account.loaded` | PM模块 | `{user_id, name, api_key, api_secret, strategy, testnet}` | 账户加载完成,触发策略加载 |
+| `ta.indicator.signal` | TA模块 | `{user_id, symbol, indicator_name, signal_type, signal_data}` | 指标信号更新,signal_type为LONG/SHORT |
+| `tr.position.opened` | TR模块 | `{user_id, symbol, side, quantity, entry_price}` | 持仓开启,更新持仓状态为LONG/SHORT,可能触发网格交易 |
+| `tr.position.closed` | TR模块 | `{user_id, symbol, side, exit_price, pnl}` | 持仓关闭,更新持仓状态为NONE,可能触发反向建仓 |
+
+#### 发布的事件(输出)
+
+| 事件主题 | 触发时机 | 数据格式 | 说明 |
+|---------|---------|---------|------|
+| `st.strategy.loaded` | 策略实例创建成功 | `{user_id, strategy, timeframe, trading_pairs}` | 策略加载成功 |
+| `st.indicator.subscribe` | 策略实例创建后 | `{user_id, symbol, indicator_name, indicator_params}` | 请求TA模块订阅指标 |
+| `st.signal.generated` | 生成交易信号 | `{user_id, symbol, side, action, quantity}` | 交易信号生成,action为OPEN/CLOSE |
+| `st.grid.create` | 持仓开启后(如配置开启) | `{user_id, symbol, entry_price, grid_levels, grid_ratio, move_up, move_down}` | 创建网格交易 |
+
+### 需求
+
+#### 需求 1: 策略配置加载
+
+**用户故事:** 作为系统管理员,我希望 ST 模块能够自动加载用户的策略配置文件,以便为每个用户创建独立的策略实例。
+
+##### 验收标准
+
+1. WHEN ST 模块接收到 `pm.account.loaded` 事件,THE ST 模块 SHALL 从事件数据中提取 user_id 和 strategy 字段
+2. THE ST 模块 SHALL 根据路径规则 `config/strategies/{user_id}/{strategy}.json` 加载策略配置文件
+3. IF 配置文件不存在,THEN THE ST 模块 SHALL 记录 ERROR 级别日志并跳过该用户的策略加载
+4. IF 配置文件格式无效,THEN THE ST 模块 SHALL 记录 ERROR 级别日志并跳过该用户的策略加载
+5. THE ST 模块 SHALL 验证配置文件包含必需字段: timeframe, leverage, position_side, margin_mode, margin_type, trading_pairs
+6. THE ST 模块 SHALL 验证 trading_pairs 数组非空,且每个交易对包含 symbol 和 indicator_params 字段
+7. WHERE grid_trading 字段存在,THE ST 模块 SHALL 验证其包含 enabled, ratio, grid_levels 等必需字段
+8. WHERE reverse 字段不存在,THE ST 模块 SHALL 使用默认值 false
+
+#### 需求 2: 策略实例创建
+
+**用户故事:** 作为量化交易员,我希望系统能够根据我的配置创建策略实例,以便执行我定义的交易逻辑。
+
+##### 验收标准
+
+1. WHEN 策略配置验证成功,THE ST 模块 SHALL 根据 strategy 名称创建对应的策略实例
+2. THE ST 模块 SHALL 为每个用户维护独立的策略实例
+3. THE ST 模块 SHALL 将 user_id、配置信息和事件总线传递给策略实例
+4. WHEN 策略实例创建成功,THE ST 模块 SHALL 发布 `st.strategy.loaded` 事件
+5. THE `st.strategy.loaded` 事件 SHALL 包含 user_id, strategy, timeframe, trading_pairs 信息
+6. THE ST 模块 SHALL 为策略配置中的每个交易对创建独立的持仓状态管理对象
+7. THE ST 模块 SHALL 维护 user_id 到策略实例的映射关系
+
+#### 需求 3: 指标订阅与信号处理
+
+**用户故事:** 作为策略开发者,我希望策略能够接收 TA 模块的指标更新,以便根据技术指标生成交易决策。
+
+##### 验收标准
+
+1. WHEN 策略实例创建成功,THE ST 模块 SHALL 为每个交易对发布 `st.indicator.subscribe` 事件
+2. THE `st.indicator.subscribe` 事件 SHALL 包含 user_id, symbol, indicator_name, indicator_params 信息
+3. THE ST 模块 SHALL 订阅 `ta.indicator.signal` 事件以接收 TA 模块的指标信号
+4. WHEN 接收到 `ta.indicator.signal` 事件,THE ST 模块 SHALL 验证 user_id 和 symbol 匹配当前策略
+5. THE ST 模块 SHALL 从 `ta.indicator.signal` 事件中提取指标信号类型(多头/空头)
+6. THE ST 模块 SHALL 将指标信号传递给对应的策略实例进行处理
+
+#### 需求 4: 交易信号生成
+
+**用户故事:** 作为量化交易员,我希望策略能够根据指标信号自动生成交易信号,以便系统执行交易操作。
+
+##### 验收标准
+
+1. WHEN 策略实例接收到指标信号,THE 策略实例 SHALL 查询当前交易对的持仓状态
+2. IF 当前无持仓且指标信号为多头,THEN THE 策略实例 SHALL 生成开多仓交易信号
+3. IF 当前无持仓且指标信号为空头,THEN THE 策略实例 SHALL 生成开空仓交易信号
+4. IF 当前持有多头且指标信号为空头,THEN THE 策略实例 SHALL 生成平多仓交易信号
+5. IF 当前持有空头且指标信号为多头,THEN THE 策略实例 SHALL 生成平空仓交易信号
+6. WHEN 生成交易信号,THE 策略实例 SHALL 根据账户余额、杠杆和风险参数计算仓位大小
+7. WHEN 生成交易信号,THE 策略实例 SHALL 发布 `st.signal.generated` 事件
+8. THE `st.signal.generated` 事件 SHALL 包含 user_id, symbol, side(BUY/SELL), action(OPEN/CLOSE), quantity, price 信息
+
+#### 需求 5: 持仓状态管理
+
+**用户故事:** 作为系统管理员,我希望 ST 模块能够准确跟踪每个策略的持仓状态,以便正确处理交易信号是没有持仓的建仓订单还是已有持仓的离场订单。
+
+##### 验收标准
+
+1. THE ST 模块 SHALL 为每个交易对维护持仓状态(NONE/LONG/SHORT)
+2. THE ST 模块 SHALL 订阅 `tr.position.opened` 事件以更新持仓状态为开仓
+3. THE ST 模块 SHALL 订阅 `tr.position.closed` 事件以更新持仓状态为平仓
+4. THE ST 模块 SHALL NOT 订阅 `de.order.filled` 事件更新持仓状态(避免挂单撤销未完成的问题)
+5. THE ST 模块 SHALL NOT 订阅 `de.position.update` 事件更新持仓状态(避免挂单撤销未完成的问题)
+6. WHEN 持仓状态变化,THE ST 模块 SHALL 记录 INFO 级别日志
+7. THE ST 模块 SHALL 提供方法查询指定交易对的当前持仓状态
+8. THE ST 模块 SHALL NOT 持久化持仓状态,仅在内存中管理
+
+#### 需求 6: 网格交易支持
+
+**用户故事:** 作为量化交易员,我希望在入场订单成交后如果策略配置中开启了网格交易后能够触发发布网格交易信息的事件供TR交易模块使用。
+
+##### 验收标准
+
+1. THE ST 模块 SHALL 订阅 `tr.position.opened` 事件以监听持仓开启
+2. WHEN 接收到 `tr.position.opened` 事件,THE 策略实例 SHALL 读取实例属性 `self._config["grid_trading"]["enabled"]`
+3. IF 实例属性 grid_trading.enabled 为 true,THEN THE 策略实例 SHALL 发布 `st.grid.create` 事件
+4. THE `st.grid.create` 事件 SHALL 包含 user_id, symbol, entry_price, grid_levels, grid_ratio 信息
+5. THE `st.grid.create` 事件 SHALL 包含 move_up, move_down 配置信息
+6. THE `st.grid.create` 事件 SHALL 包含网格止损止盈参数(如果配置中存在)
+7. THE ST 模块 SHALL 在持仓开启后发布网格事件,因为策略实例已加载配置无需重复读取文件
+
+#### 需求 7: 订单成交事件处理
+
+**用户故事:** 作为系统管理员,我希望 ST 模块能够正确处理订单成交事件,以便更新持仓状态和触发后续操作，入场订单成交后有可能触发网格交易，出场订单成交后可能触发反向建仓操作。
+
+##### 验收标准
+
+1. THE ST 模块 SHALL 订阅 `de.order.filled` 事件以监听所有订单成交
+2. WHEN 接收到入场订单成交事件,THE ST 模块 SHALL 检查是否需要触发网格交易
+3. WHEN 接收到出场订单成交事件,THE ST 模块 SHALL 检查是否需要触发反向建仓
+4. THE ST 模块 SHALL 订阅 `tr.position.closed` 事件以确认平仓操作完全完成(包括挂单撤销)
+5. IF 策略配置中 reverse 为 true 且平仓完成,THEN THE ST 模块 SHALL 立即生成反向开仓信号
+6. IF 平多仓完成且 reverse 为 true,THEN THE ST 模块 SHALL 生成开空仓信号
+7. IF 平空仓完成且 reverse 为 true,THEN THE ST 模块 SHALL 生成开多仓信号
+8. THE ST 模块 SHALL 记录所有订单成交事件的处理日志
+
+#### 需求 8: 错误处理与日志记录
+
+**用户故事:** 作为系统管理员,我希望 ST 模块能够妥善处理异常情况并记录详细日志,以便排查问题和监控系统运行。
+
+##### 验收标准
+
+1. WHEN 策略配置文件加载失败,THE ST 模块 SHALL 记录 ERROR 级别日志并继续处理其他用户
+2. WHEN 策略实例创建失败,THE ST 模块 SHALL 记录 ERROR 级别日志并发布 `st.strategy.load_failed` 事件
+3. WHEN 指标信号处理异常,THE ST 模块 SHALL 记录 ERROR 级别日志并继续运行
+4. WHEN 交易信号生成失败,THE ST 模块 SHALL 记录 ERROR 级别日志并发布 `st.signal.failed` 事件
+5. THE ST 模块 SHALL 确保单个策略实例的错误不影响其他策略实例
+6. THE ST 模块 SHALL 在所有日志中包含 user_id 和 symbol 信息以便追踪
+7. THE ST 模块 SHALL 在策略加载时记录 INFO 级别日志
+8. THE ST 模块 SHALL 在交易信号生成时记录 INFO 级别日志
+9. THE ST 模块 SHALL 在持仓状态变化时记录 INFO 级别日志
+10. THE ST 模块 SHALL 使用 Loguru 记录所有日志,日志语言为中文
+
+#### 需求 9: 多策略隔离
+
+**用户故事:** 作为量化交易员,我希望能够同时运行多个策略实例,并且它们之间互不干扰。
+
+##### 验收标准
+
+1. THE ST 模块 SHALL 使用单例模式实现 STManager 类,作为全局唯一的策略管理器
+2. THE ST 模块 SHALL 为每个用户创建独立的策略实例
+3. THE ST 模块 SHALL 维护 user_id 到策略实例的映射关系
+4. THE ST 模块 SHALL 确保不同用户的策略实例相互隔离,一个策略的错误不影响其他策略
+5. THE ST 模块 SHALL 为每个策略实例维护独立的持仓状态管理器
+6. THE ST 模块 SHALL 提供方法查询所有已创建策略实例的 user_id 列表
+7. THE ST 模块 SHALL 提供方法根据 user_id 获取对应的策略实例
+8. WHEN 系统关闭时,THE ST 模块 SHALL 优雅关闭所有策略实例并发布 `st.manager.shutdown` 事件
+
+
+
+
+
+
