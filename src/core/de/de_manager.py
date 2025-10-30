@@ -84,6 +84,9 @@ class DEManager:
         # 订阅账户余额查询事件
         self._event_bus.subscribe(DEEvents.INPUT_GET_ACCOUNT_BALANCE, self._on_get_account_balance)
 
+        # 订阅历史K线获取事件
+        self._event_bus.subscribe(DEEvents.INPUT_GET_HISTORICAL_KLINES, self._on_get_historical_klines)
+
         logger.info("DEManager初始化完成")
 
     @classmethod
@@ -521,3 +524,96 @@ class DEManager:
 
         except Exception as e:
             logger.error(f"账户余额查询失败: user_id={user_id}, asset={asset}, error={e}")
+
+    # ==================== 历史K线获取事件处理 ====================
+
+    async def _on_get_historical_klines(self, event: Event) -> None:
+        """
+        处理de.get_historical_klines事件（私有方法）
+
+        Args:
+            event: de.get_historical_klines事件
+                data: {
+                    "user_id": "user_001",
+                    "symbol": "XRPUSDC",
+                    "interval": "15m",
+                    "limit": 200
+                }
+
+        实现细节：
+            1. 从事件数据中提取user_id、symbol、interval、limit参数
+            2. 获取对应的BinanceClient实例
+            3. 调用BinanceClient.get_historical_klines方法
+            4. 转换K线格式（币安格式 → 标准格式）
+            5. 成功时发布de.historical_klines.success事件
+            6. 失败时发布de.historical_klines.failed事件
+        """
+        data = event.data
+        user_id = data.get("user_id")
+        symbol = data.get("symbol")
+        interval = data.get("interval")
+        limit = data.get("limit", 200)
+
+        logger.debug(f"处理历史K线获取事件: user_id={user_id}, symbol={symbol}, interval={interval}, limit={limit}")
+
+        # 检查客户端是否存在
+        if user_id not in self._clients:
+            logger.error(f"历史K线获取失败: user_id={user_id}的客户端不存在")
+            await self._event_bus.publish(Event(
+                subject=DEEvents.HISTORICAL_KLINES_FAILED,
+                data={
+                    "user_id": user_id,
+                    "symbol": symbol,
+                    "interval": interval,
+                    "error": f"客户端不存在: user_id={user_id}"
+                }
+            ))
+            return
+
+        client = self._clients[user_id]
+
+        try:
+            # 调用BinanceClient.get_historical_klines
+            raw_klines = await client.get_historical_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+
+            # 转换K线格式（币安格式 → 标准格式）
+            klines = []
+            for k in raw_klines:
+                klines.append({
+                    "open": k[1],
+                    "high": k[2],
+                    "low": k[3],
+                    "close": k[4],
+                    "volume": k[5],
+                    "timestamp": k[0],
+                    "is_closed": True  # 历史K线都是已关闭的
+                })
+
+            # 发布历史K线成功事件
+            await self._event_bus.publish(Event(
+                subject=DEEvents.HISTORICAL_KLINES_SUCCESS,
+                data={
+                    "user_id": user_id,
+                    "symbol": symbol,
+                    "interval": interval,
+                    "klines": klines
+                }
+            ))
+
+            logger.info(f"历史K线获取成功: user_id={user_id}, symbol={symbol}, interval={interval}, count={len(klines)}")
+
+        except Exception as e:
+            logger.error(f"历史K线获取失败: user_id={user_id}, symbol={symbol}, interval={interval}, error={e}")
+            await self._event_bus.publish(Event(
+                subject=DEEvents.HISTORICAL_KLINES_FAILED,
+                data={
+                    "user_id": user_id,
+                    "symbol": symbol,
+                    "interval": interval,
+                    "error": str(e)
+                }
+            ))

@@ -2,8 +2,8 @@
 
 基于事件驱动架构（EDA）的加密货币量化交易系统，专注于币安永续合约交易。
 
-[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen)](https://github.com/wdp12300000/ST_Trading)
-[![Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen)](https://github.com/wdp12300000/ST_Trading)
+[![Tests](https://img.shields.io/badge/tests-342%20passed-brightgreen)](https://github.com/wdp12300000/ST_Trading)
+[![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)](https://github.com/wdp12300000/ST_Trading)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -19,11 +19,12 @@ ST_Trading 是一个使用 Python 开发的量化交易系统，采用事件驱�
 - ✅ **事件持久化**：SQLite3 持久化事件历史，支持查询和审计
 - ✅ **通配符订阅**：灵活的事件路由机制
 - ✅ **依赖注入**：可测试、可扩展的设计
-- ✅ **高测试覆盖率**：87% 测试覆盖率，288 个测试全部通过
+- ✅ **高测试覆盖率**：88% 测试覆盖率，342 个测试全部通过
 - ✅ **多账户管理**：支持多个交易账户独立运行
 - ✅ **币安API集成**：完整的币安期货REST API和WebSocket支持
 - ✅ **实时数据流**：K线数据、订单更新、账户更新实时推送
 - ✅ **策略执行引擎**：支持多策略并行、网格交易、反向建仓
+- ✅ **技术指标分析**：支持自定义指标、指标聚合、信号生成
 
 ## 🏗️ 架构设计
 
@@ -50,15 +51,21 @@ ST_Trading/
 │   │   │   ├── user_data_websocket.py # 用户数据流WebSocket
 │   │   │   ├── de_events.py           # DE模块事件常量
 │   │   │   └── README.md              # DE模块文档
-│   │   └── st/                 # 策略执行模块（ST）
-│   │       ├── st_manager.py          # ST管理器（单例）
-│   │       ├── base_strategy.py       # 策略抽象基类
-│   │       └── st_events.py           # ST模块事件常量
+│   │   ├── st/                 # 策略执行模块（ST）
+│   │   │   ├── st_manager.py          # ST管理器（单例）
+│   │   │   ├── base_strategy.py       # 策略抽象基类
+│   │   │   └── st_events.py           # ST模块事件常量
+│   │   └── ta/                 # 技术分析模块（TA）
+│   │       ├── ta_manager.py          # TA管理器（单例）
+│   │       ├── base_indicator.py      # 指标抽象基类
+│   │       ├── indicator_factory.py   # 指标工厂类
+│   │       ├── ta_events.py           # TA模块事件常量
+│   │       └── README.md              # TA模块文档
 │   └── utils/
 │       └── logger.py           # 日志模块
 ├── tests/
-│   ├── unit/                   # 单元测试（255个）
-│   └── integration/            # 集成测试（33个）
+│   ├── unit/                   # 单元测试（301个）
+│   └── integration/            # 集成测试（41个）
 ├── logs/                       # 日志文件
 ├── data/                       # 数据文件
 ├── docs/                       # 文档
@@ -296,6 +303,81 @@ TR模块 → tr.position.closed → ST模块 → st.signal.generated → TR模�
 
 **测试覆盖率**: 92% | **测试数**: 43个
 
+---
+
+### 5. TA（技术分析）模块
+
+TA模块负责管理技术指标实例，处理K线数据，计算技术指标并生成交易信号。
+
+#### 主要功能
+- ✅ 指标实例管理（TAManager单例）
+- ✅ 指标订阅和创建
+- ✅ 历史K线数据请求和处理
+- ✅ 实时K线数据处理
+- ✅ 指标结果聚合和事件发布
+- ✅ 自定义指标支持（BaseIndicator抽象基类）
+- ✅ 指标工厂模式（IndicatorFactory）
+
+#### 使用示例
+
+```python
+from src.core.ta.ta_manager import TAManager
+from src.core.ta.base_indicator import BaseIndicator, IndicatorSignal
+from src.core.ta.indicator_factory import IndicatorFactory
+from src.core.event import Event, EventBus
+
+# 获取TAManager实例
+event_bus = EventBus.get_instance()
+ta_manager = TAManager.get_instance(event_bus=event_bus)
+
+# 创建自定义指标
+class MAStopIndicator(BaseIndicator):
+    async def calculate(self, klines):
+        # 计算移动平均线
+        closes = [float(k["close"]) for k in klines]
+        ma_value = sum(closes[-20:]) / 20
+
+        # 判断信号
+        if closes[-1] > ma_value:
+            return {"signal": IndicatorSignal.LONG.value, "data": {"ma": ma_value}}
+        else:
+            return {"signal": IndicatorSignal.SHORT.value, "data": {"ma": ma_value}}
+
+# 注册指标
+IndicatorFactory.register_indicator("ma_stop_ta", MAStopIndicator)
+
+# 订阅指标（ST模块发布）
+await event_bus.publish(Event(
+    subject="st.indicator.subscribe",
+    data={
+        "user_id": "user_001",
+        "symbol": "XRPUSDC",
+        "indicator_name": "ma_stop_ta",
+        "indicator_params": {"period": 20},
+        "timeframe": "15m"
+    }
+))
+```
+
+#### 事件流程
+
+```
+ST模块 → st.indicator.subscribe → TA模块
+TA模块 → de.get_historical_klines → DE模块
+DE模块 → de.historical_klines.success → TA模块（初始化指标）
+DE模块 → de.kline.update → TA模块（实时计算）
+TA模块 → ta.calculation.completed → ST模块
+```
+
+#### 设计原则
+
+- **无K线缓存**：每次计算都使用DE模块提供的完整历史K线
+- **指标聚合**：等待同一交易对的所有指标完成后统一发布事件
+- **只处理关闭的K线**：只在K线关闭时计算指标
+- **指标就绪状态**：只处理已初始化的指标
+
+**测试覆盖率**: 90% | **测试数**: 54个 | **详细文档**: [src/core/ta/README.md](src/core/ta/README.md)
+
 ## 🧪 测试
 
 ### 运行测试
@@ -310,16 +392,17 @@ pytest --cov=src --cov-report=html tests/
 
 ### 测试统计
 
-- **总测试数：288 个** ✅
-- **单元测试：255 个**
-- **集成测试：33 个**
-- **整体测试覆盖率：87%**
+- **总测试数：342 个** ✅
+- **单元测试：301 个**
+- **集成测试：41 个**
+- **整体测试覆盖率：88%**
 
 #### 各模块覆盖率
 - EDA模块：97%（99个测试）
 - PM模块：89%（33个测试）
 - DE模块：79%（113个测试）
 - ST模块：92%（43个测试）
+- TA模块：90%（54个测试）
 
 详细报告：[TEST_COVERAGE_REPORT.md](docs/TEST_COVERAGE_REPORT.md)
 
@@ -376,12 +459,19 @@ pytest --cov=src --cov-report=html tests/
   - [x] 单元测试（36个）
   - [x] 集成测试（7个）
 
-### 待开发模块
+- [x] **TA（技术分析）模块** - 90% 覆盖率
+  - [x] TAManager 管理器（单例）
+  - [x] BaseIndicator 指标抽象基类
+  - [x] IndicatorFactory 指标工厂
+  - [x] 指标订阅和创建
+  - [x] 历史K线数据处理
+  - [x] 实时K线数据处理
+  - [x] 指标结果聚合
+  - [x] 事件发布机制
+  - [x] 单元测试（46个）
+  - [x] 集成测试（8个）
 
-- [ ] **TA（技术分析）模块**
-  - [ ] 指标计算引擎
-  - [ ] 多指标支持
-  - [ ] 自定义指标
+### 待开发模块
 
 - [ ] **TR（交易执行）模块**
   - [ ] 订单管理
@@ -407,13 +497,14 @@ MIT License
 
 ---
 
-**开发时间：** 2025-10-27 ~ 2025-10-29
-**版本：** v0.4.0 - EDA + PM + DE + ST 模块
-**状态：** ✅ 核心模块开发完成，288个测试全部通过
+**开发时间：** 2025-10-27 ~ 2025-10-30
+**版本：** v0.5.0 - EDA + PM + DE + ST + TA 模块
+**状态：** ✅ 核心模块开发完成，342个测试全部通过
 
 ### 版本历史
 - **v0.1.0** (2025-10-27) - EDA事件驱动架构模块
 - **v0.2.0** (2025-10-28) - PM账户管理模块
 - **v0.3.0** (2025-10-28) - DE数据引擎模块
 - **v0.4.0** (2025-10-29) - ST策略执行模块
+- **v0.5.0** (2025-10-30) - TA技术分析模块
 

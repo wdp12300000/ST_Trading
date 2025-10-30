@@ -64,7 +64,14 @@ class STEvents:
     
     # 指标订阅请求事件
     # 当策略实例创建后，为每个交易对发布此事件请求TA模块订阅指标
-    # 数据格式: {user_id, symbol, indicator_name, indicator_params}
+    # 数据格式: {user_id, symbol, indicator_name, indicator_params, timeframe}
+    # 示例: {
+    #     "user_id": "user_001",
+    #     "symbol": "XRPUSDC",
+    #     "indicator_name": "ma_stop_ta",
+    #     "indicator_params": {"period": 3, "percent": 2},
+    #     "timeframe": "15m"
+    # }
     INDICATOR_SUBSCRIBE = "st.indicator.subscribe"
     
     # 交易信号生成事件

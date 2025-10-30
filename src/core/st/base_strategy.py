@@ -136,13 +136,17 @@ class BaseStrategy(ABC):
     async def _publish_indicator_subscriptions(self) -> None:
         """
         为每个交易对发布指标订阅事件
-        
+
         遍历所有交易对，为每个交易对的每个指标发布订阅请求事件。
+        事件数据包含：user_id, symbol, indicator_name, indicator_params, timeframe
         """
+        # 从配置中获取时间周期
+        timeframe = self._config.get("timeframe", "15m")
+
         for pair in self._config.get("trading_pairs", []):
             symbol = pair["symbol"]
             indicator_params = pair.get("indicator_params", {})
-            
+
             for indicator_name, params in indicator_params.items():
                 event = Event(
                     subject=STEvents.INDICATOR_SUBSCRIBE,
@@ -150,13 +154,14 @@ class BaseStrategy(ABC):
                         "user_id": self._user_id,
                         "symbol": symbol,
                         "indicator_name": indicator_name,
-                        "indicator_params": params
+                        "indicator_params": params,
+                        "timeframe": timeframe  # 添加时间周期信息
                     },
                     source="st"
                 )
-                
+
                 await self._event_bus.publish(event)
-                logger.info(f"[base_strategy.py:{self._get_line_number()}] 发布指标订阅: {symbol}/{indicator_name}")
+                logger.info(f"[base_strategy.py:{self._get_line_number()}] 发布指标订阅: {symbol}/{indicator_name}, timeframe={timeframe}")
     
     async def _generate_signal(self, symbol: str, side: str, action: str) -> None:
         """

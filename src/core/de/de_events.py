@@ -88,8 +88,9 @@ class DEEvents:
     WEBSOCKET_DISCONNECTED = "de.websocket.disconnected"
 
     # K线数据更新事件
-    # 当MarketWebSocket接收到新的K线数据时发布
-    # 数据格式: {user_id, symbol, interval, kline: {open, high, low, close, volume, timestamp, is_closed}}
+    # 当MarketWebSocket接收到K线关闭消息时发布（只在is_closed=True时发布）
+    # 包含完整的历史K线列表（包括最新关闭的K线）
+    # 数据格式: {user_id, symbol, interval, klines: [{open, high, low, close, volume, timestamp, is_closed}, ...]}
     KLINE_UPDATE = "de.kline.update"
 
     # 历史K线获取成功事件

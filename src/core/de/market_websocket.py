@@ -46,6 +46,7 @@ class MarketWebSocket:
     属性：
         user_id: 用户ID
         _event_bus: 事件总线
+        _binance_client: BinanceClient实例（用于获取历史K线）
         _ws_url: WebSocket基础URL
         _websocket: WebSocket连接对象
         _subscriptions: 订阅配置列表
@@ -56,13 +57,14 @@ class MarketWebSocket:
     # 币安正式网WebSocket端点
     WS_URL = "wss://fstream.binance.com"
 
-    def __init__(self, user_id: str, event_bus: EventBus):
+    def __init__(self, user_id: str, event_bus: EventBus, binance_client=None):
         """
         初始化MarketWebSocket实例
 
         Args:
             user_id: 用户ID
             event_bus: 事件总线实例
+            binance_client: BinanceClient实例（可选，用于获取历史K线）
 
         实现细节：
             - 初始化订阅列表
@@ -71,6 +73,7 @@ class MarketWebSocket:
         """
         self.user_id = user_id
         self._event_bus = event_bus
+        self._binance_client = binance_client
         self._ws_url = self.WS_URL
         self._websocket = None
         self._subscriptions: List[Dict[str, str]] = []
@@ -273,44 +276,80 @@ class MarketWebSocket:
         """
         处理K线消息并发布事件
 
+        设计原则：
+            - 只在K线关闭时发布事件（is_closed=True）
+            - 发布完整的历史K线列表（包含最新的）
+            - 符合"无缓存"设计原则
+
         Args:
             data: K线消息数据
 
         实现细节：
             1. 提取K线数据
-            2. 构建de.kline.update事件
-            3. 发布事件（不缓存数据）
+            2. 检查is_closed标志
+            3. 如果K线已关闭，调用BinanceClient获取最新的历史K线
+            4. 转换K线格式（币安格式 → 标准格式）
+            5. 发布de.kline.update事件（包含完整历史K线列表）
         """
         try:
             kline_data = data["k"]
+            is_closed = kline_data["x"]
+            symbol = kline_data["s"]
+            interval = kline_data["i"]
 
-            # 构建K线事件数据
-            kline = {
-                "open": kline_data["o"],
-                "high": kline_data["h"],
-                "low": kline_data["l"],
-                "close": kline_data["c"],
-                "volume": kline_data["v"],
-                "timestamp": kline_data["t"],
-                "is_closed": kline_data["x"]
-            }
+            # 只处理已关闭的K线
+            if not is_closed:
+                logger.debug(f"K线未关闭，跳过: user_id={self.user_id}, symbol={symbol}, interval={interval}")
+                return
 
-            # 发布de.kline.update事件
-            event = Event(
-                subject=DEEvents.KLINE_UPDATE,
-                data={
-                    "user_id": self.user_id,
-                    "symbol": kline_data["s"],
-                    "interval": kline_data["i"],
-                    "kline": kline
-                },
-                source="DE"
-            )
+            logger.info(f"K线关闭: user_id={self.user_id}, symbol={symbol}, interval={interval}")
 
-            await self._event_bus.publish(event)
+            # 检查是否有BinanceClient实例
+            if not self._binance_client:
+                logger.warning(f"未设置BinanceClient，无法获取历史K线: user_id={self.user_id}")
+                return
 
-            logger.debug(f"K线更新: user_id={self.user_id}, symbol={kline_data['s']}, "
-                        f"interval={kline_data['i']}, is_closed={kline_data['x']}")
+            # 获取最新的历史K线数据（默认200根）
+            try:
+                raw_klines = await self._binance_client.get_historical_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    limit=200
+                )
+
+                # 转换K线格式（币安格式 → 标准格式）
+                klines = []
+                for k in raw_klines:
+                    klines.append({
+                        "open": k[1],
+                        "high": k[2],
+                        "low": k[3],
+                        "close": k[4],
+                        "volume": k[5],
+                        "timestamp": k[0],
+                        "is_closed": True  # 历史K线都是已关闭的
+                    })
+
+                # 发布de.kline.update事件（包含完整历史K线列表）
+                event = Event(
+                    subject=DEEvents.KLINE_UPDATE,
+                    data={
+                        "user_id": self.user_id,
+                        "symbol": symbol,
+                        "interval": interval,
+                        "klines": klines  # 完整的历史K线列表
+                    },
+                    source="DE"
+                )
+
+                await self._event_bus.publish(event)
+
+                logger.info(f"K线更新事件已发布: user_id={self.user_id}, symbol={symbol}, "
+                           f"interval={interval}, klines_count={len(klines)}")
+
+            except Exception as e:
+                logger.error(f"获取历史K线失败: user_id={self.user_id}, symbol={symbol}, "
+                           f"interval={interval}, error={e}")
 
         except KeyError as e:
             logger.error(f"K线数据格式错误: user_id={self.user_id}, missing_key={e}")
