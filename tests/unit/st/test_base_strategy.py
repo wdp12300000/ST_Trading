@@ -121,8 +121,9 @@ class TestBaseStrategyEventPublishing:
         """测试为每个交易对发布indicator.subscribe事件"""
         event_bus = Mock()
         event_bus.publish = AsyncMock()
-        
+
         config = {
+            "timeframe": "15m",  # 添加timeframe配置
             "trading_pairs": [
                 {
                     "symbol": "XRPUSDC",
@@ -138,15 +139,15 @@ class TestBaseStrategyEventPublishing:
                 }
             ]
         }
-        
+
         strategy = ConcreteStrategy("user_001", config, event_bus)
 
         # 发布indicator.subscribe事件
         await strategy._publish_indicator_subscriptions()
-        
+
         # 验证发布了2次事件（2个交易对）
         assert event_bus.publish.call_count == 2
-        
+
         # 验证第一个事件
         first_call = event_bus.publish.call_args_list[0][0][0]
         assert first_call.subject == STEvents.INDICATOR_SUBSCRIBE
@@ -154,11 +155,13 @@ class TestBaseStrategyEventPublishing:
         assert first_call.data["symbol"] == "XRPUSDC"
         assert first_call.data["indicator_name"] == "ma_stop_ta"
         assert first_call.data["indicator_params"] == {"period": 3, "percent": 2}
-        
+        assert first_call.data["timeframe"] == "15m"  # 验证timeframe字段
+
         # 验证第二个事件
         second_call = event_bus.publish.call_args_list[1][0][0]
         assert second_call.data["symbol"] == "BTCUSDC"
         assert second_call.data["indicator_params"] == {"period": 5, "percent": 3}
+        assert second_call.data["timeframe"] == "15m"  # 验证timeframe字段
 
 
 class TestBaseStrategySignalGeneration:

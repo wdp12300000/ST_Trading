@@ -83,6 +83,9 @@ class STEvents:
     
     # 网格交易创建事件
     # 当持仓开启后且配置开启网格交易时发布，供TR模块创建网格订单
-    # 数据格式: {user_id, symbol, entry_price, grid_levels, grid_ratio, move_up, move_down}
+    # 数据格式: {user_id, symbol, entry_price, upper_price, lower_price, grid_levels, grid_ratio, move_up, move_down, side}
+    # side: 网格方向，"LONG"表示多头网格，"SHORT"表示空头网格
+    # upper_price: 网格上边价格（由ST策略计算）
+    # lower_price: 网格下边价格（由ST策略计算）
     GRID_CREATE = "st.grid.create"
 

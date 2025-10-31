@@ -22,10 +22,12 @@ DEManager（DE管理器）类
     await manager.shutdown()
 """
 
+import asyncio
 import time
 from typing import Dict, List, Optional
 from src.core.event import Event, EventBus
 from src.core.de.binance_client import BinanceClient
+from src.core.de.market_websocket import MarketWebSocket
 from src.core.de.de_events import DEEvents
 from src.core.pm.pm_events import PMEvents
 from src.utils.logger import logger
@@ -52,6 +54,8 @@ class DEManager:
     Attributes:
         _instance: 单例实例（类属性）
         _clients: 用户ID到BinanceClient实例的映射（私有）
+        _market_websockets: 用户ID到MarketWebSocket实例的映射（私有）
+        _websocket_tasks: WebSocket后台任务列表（私有）
         _event_bus: 事件总线（私有）
     """
 
@@ -66,6 +70,7 @@ class DEManager:
 
         实现细节：
             - 初始化客户端字典
+            - 初始化WebSocket字典
             - 订阅pm.account.loaded事件
             - 订阅trading.order.create事件
             - 订阅trading.order.cancel事件
@@ -73,6 +78,8 @@ class DEManager:
         """
         self._event_bus = event_bus
         self._clients: Dict[str, BinanceClient] = {}
+        self._market_websockets: Dict[str, MarketWebSocket] = {}
+        self._websocket_tasks: List[asyncio.Task] = []
 
         # 订阅pm.account.loaded事件
         self._event_bus.subscribe(PMEvents.ACCOUNT_LOADED, self._on_account_loaded)
@@ -301,6 +308,117 @@ class DEManager:
         """
         return len(self._clients)
 
+    # ==================== WebSocket管理 ====================
+
+    async def start_market_websocket(self, user_id: str, symbols: List[str], interval: str) -> None:
+        """
+        启动市场数据WebSocket连接
+
+        Args:
+            user_id: 用户ID
+            symbols: 交易对列表
+            interval: K线时间周期
+
+        实现细节：
+            1. 检查是否已存在WebSocket连接
+            2. 获取对应的BinanceClient实例
+            3. 创建MarketWebSocket实例
+            4. 订阅所有交易对的K线
+            5. 启动WebSocket连接（后台任务）
+
+        使用方式：
+            await de_manager.start_market_websocket(
+                user_id="user_001",
+                symbols=["BTCUSDT", "ETHUSDT"],
+                interval="15m"
+            )
+        """
+        # 检查是否已存在
+        if user_id in self._market_websockets:
+            logger.warning(f"MarketWebSocket已存在: user_id={user_id}")
+            return
+
+        # 获取BinanceClient
+        client = self.get_client(user_id)
+        if not client:
+            logger.error(f"无法启动WebSocket，BinanceClient不存在: user_id={user_id}")
+            return
+
+        try:
+            # 创建MarketWebSocket实例
+            logger.info(f"创建MarketWebSocket: user_id={user_id}, symbols={symbols}, interval={interval}")
+            market_ws = MarketWebSocket(
+                user_id=user_id,
+                event_bus=self._event_bus,
+                binance_client=client
+            )
+
+            # 订阅所有交易对的K线
+            for symbol in symbols:
+                await market_ws.subscribe_kline(symbol, interval)
+                logger.info(f"订阅K线: user_id={user_id}, symbol={symbol}, interval={interval}")
+
+            # 保存WebSocket实例
+            self._market_websockets[user_id] = market_ws
+
+            # 启动WebSocket连接（后台任务）
+            task = asyncio.create_task(market_ws.connect())
+            self._websocket_tasks.append(task)
+
+            logger.info(f"✅ MarketWebSocket启动成功: user_id={user_id}")
+
+        except Exception as e:
+            logger.error(f"启动MarketWebSocket失败: user_id={user_id}, error={e}", exc_info=True)
+
+    async def stop_all_websockets(self) -> None:
+        """
+        停止所有WebSocket连接
+
+        实现细节：
+            1. 断开所有MarketWebSocket连接
+            2. 取消所有WebSocket后台任务
+            3. 清空WebSocket字典和任务列表
+
+        使用方式：
+            await de_manager.stop_all_websockets()
+        """
+        logger.info(f"停止所有WebSocket连接: {len(self._market_websockets)}个")
+
+        # 断开所有MarketWebSocket
+        for user_id, market_ws in self._market_websockets.items():
+            try:
+                logger.info(f"断开MarketWebSocket: user_id={user_id}")
+                await market_ws.disconnect()
+            except Exception as e:
+                logger.error(f"断开MarketWebSocket失败: user_id={user_id}, error={e}")
+
+        # 取消所有后台任务
+        for task in self._websocket_tasks:
+            if not task.done():
+                task.cancel()
+
+        # 等待所有任务完成
+        if self._websocket_tasks:
+            await asyncio.gather(*self._websocket_tasks, return_exceptions=True)
+
+        # 清空字典和列表
+        self._market_websockets.clear()
+        self._websocket_tasks.clear()
+
+        logger.info("✅ 所有WebSocket连接已停止")
+
+    def get_market_websocket(self, user_id: str) -> Optional[MarketWebSocket]:
+        """
+        获取指定用户的MarketWebSocket实例
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            MarketWebSocket实例，如果不存在则返回None
+        """
+        return self._market_websockets.get(user_id)
+
     # ==================== 系统关闭 ====================
 
     async def shutdown(self) -> None:
@@ -308,13 +426,17 @@ class DEManager:
         关闭DE管理器，清理所有资源
 
         实现细节：
-            1. 清空所有BinanceClient实例
-            2. 记录日志
+            1. 停止所有WebSocket连接
+            2. 清空所有BinanceClient实例
+            3. 记录日志
 
         使用方式：
             await manager.shutdown()
         """
         logger.info(f"DEManager关闭中，清理{len(self._clients)}个客户端")
+
+        # 停止所有WebSocket连接
+        await self.stop_all_websockets()
 
         # 清空客户端字典
         self._clients.clear()
